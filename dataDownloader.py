@@ -11,6 +11,8 @@ Institution: University of Liège
 ################################### Imports ###################################
 ###############################################################################
 
+import yfinance as yf #source of $BTC data
+
 import pandas as pd
 import pandas_datareader as pdr
 import requests
@@ -192,7 +194,9 @@ class YahooFinance:
         OUTPUTS:    - data: Pandas dataframe containing the stock market data.
         """
         
-        data = pdr.data.DataReader(marketSymbol, 'yahoo', startingDate, endingDate)
+        #data = pdr.data.DataReader(marketSymbol, 'yahoo', startingDate, endingDate)
+        data = yf.download(marketSymbol, start=startingDate, end=endingDate,
+                   auto_adjust=False, progress=False, multi_level_index=False)
         self.data = self.processDataframe(data)
         return self.data
 

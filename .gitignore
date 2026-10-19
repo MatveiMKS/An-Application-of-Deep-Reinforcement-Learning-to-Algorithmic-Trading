@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Local editor settings
+.vscode/
+
+# Generated dashboard runs
+dashboard/runs/
+
+# Downloaded market data
+Data/*.csv

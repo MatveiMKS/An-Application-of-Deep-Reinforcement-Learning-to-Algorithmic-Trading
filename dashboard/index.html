@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Runs TDQN</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #fff; --text: #1d2330; --muted: #667085; --line: #e3e6eb;
+    --accent: #2f6fed; --ok: #1f9d55; --err: #d64545; --run: #c98a00;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14171c; --panel: #1c2027; --text: #e6e8eb; --muted: #98a2b3; --line: #2c323b;
+            --accent: #6d9bff; --ok: #4cc38a; --err: #ff6b6b; --run: #f0b429; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+  header { padding: 14px 24px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  header h1 { margin: 0; font-size: 18px; }
+  main { display: grid; grid-template-columns: 340px 1fr; gap: 16px; padding: 16px 24px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; margin-bottom: 16px; }
+  h2 { font-size: 15px; margin: 0 0 10px; }
+  h3 { font-weight: 500; margin: 0 0 4px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin-top: 8px; }
+  input, select, button { font: inherit; width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  button { cursor: pointer; margin-top: 12px; background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button.small { width: auto; margin: 0; padding: 2px 8px; font-size: 12px; background: transparent; color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .state { font-weight: 600; }
+  .state.done { color: var(--ok); } .state.error, .state.unknown { color: var(--err); } .state.running, .state.pending { color: var(--run); }
+  .scroll { overflow-x: auto; }
+  .charts { display: grid; grid-template-columns: 1fr; gap: 16px; }
+  .chartbox { position: relative; height: 320px; }
+  .hint { color: var(--muted); font-size: 12px; }
+  pre { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px; max-height: 260px; overflow: auto; font-size: 12px; white-space: pre-wrap; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+  .tabs button { width: auto; margin: 0; padding: 4px 10px; background: transparent; color: var(--text); border-color: var(--line); font-weight: 500; }
+  .tabs button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+</style>
+</head>
+<body>
+<header><h1>Runs TDQN : lancer et comparer</h1></header>
+<main>
+  <div>
+    <section>
+      <h2>Nouveau run</h2>
+      <form id="form">
+        <label>Stratégie</label><select name="strategy" id="strategy"></select>
+        <label>Actif</label><select name="stock" id="stock"></select>
+        <label>Épisodes (TDQN seulement)</label><input name="episodes" id="episodes" type="number" min="1">
+        <div class="row">
+          <div><label>Début train</label><input name="startingDate" id="startingDate"></div>
+          <div><label>Début test</label><input name="splitingDate" id="splitingDate"></div>
+        </div>
+        <label>Fin test</label><input name="endingDate" id="endingDate">
+        <label>Nom (facultatif)</label><input name="label" placeholder="ex. tdqn-50ep">
+        <button type="submit">Lancer</button>
+      </form>
+      <p class="hint">Chaque run tourne dans un processus séparé ; tu peux en lancer plusieurs.</p>
+    </section>
+    <section>
+      <h2>Journal <span id="logName" class="hint"></span></h2>
+      <pre id="log">Clique sur « journal » dans la liste des runs.</pre>
+    </section>
+  </div>
+
+  <div>
+    <section>
+      <h2>Runs</h2>
+      <div class="scroll"><table id="runs"></table></div>
+      <p class="hint">Coche des runs pour les comparer. Un run en cours peut être coché : ses courbes d'entraînement se mettent à jour pendant qu'il tourne.</p>
+    </section>
+    <section>
+      <div class="tabs" id="periodTabs">
+        <button data-period="test" class="active">Test</button>
+        <button data-period="train">Entraînement</button>
+      </div>
+      <div class="charts">
+        <div><h2>Capital (base 100 au début de la période)</h2><div class="chartbox"><canvas id="equity"></canvas></div></div>
+        <div><h2>Prix et décisions <span id="priceRun" class="hint"></span></h2><div class="chartbox"><canvas id="price"></canvas></div>
+          <p class="hint">▲ passage long, ▼ passage short (ou cash). Run affiché : le premier coché.</p></div>
+      </div>
+    </section>
+    <section>
+      <h2>Courbes d'entraînement (TDQN)</h2>
+      <div class="charts">
+        <div><h3 class="hint">Sharpe ratio par épisode : trait plein = période d'entraînement, pointillés = <span id="secondTag">période de test</span></h3>
+          <div class="chartbox"><canvas id="sharpeCurve"></canvas></div></div>
+        <div><h3 class="hint">Perte (Huber) du réseau, moyenne glissante par paquets de mises à jour</h3>
+          <div class="chartbox"><canvas id="lossCurve"></canvas></div></div>
+        <div><h3 class="hint">Récompense totale par épisode (disponible à la fin de l'entraînement)</h3>
+          <div class="chartbox"><canvas id="rewardCurve"></canvas></div></div>
+      </div>
+      <p class="hint" id="curvesHint"></p>
+    </section>
+    <section>
+      <h2>Indicateurs</h2>
+      <div class="scroll"><table id="metrics"></table></div>
+    </section>
+  </div>
+</main>
+
+<script>
+const palette = ['#2f6fed', '#e8590c', '#1f9d55', '#9c36b5', '#d6336c', '#0c8599', '#5c7cfa', '#f08c00'];
+const selected = new Set();
+const details = {};          // id -> détail du run (séries), mis en cache
+let period = 'test';
+let equityChart, priceChart, sharpeChart, lossChart, rewardChart;
+
+const fmt = (v, d = 2) => v === null || v === undefined ? '–' : Number(v).toFixed(d);
+const $ = id => document.getElementById(id);
+
+async function api(path, options) {
+  const response = await fetch(path, options);
+  return path.endsWith('/log') ? response.text() : response.json();
+}
+
+async function loadOptions() {
+  const o = await api('/api/options');
+  $('strategy').innerHTML = o.strategies.map(s => `<option>${s}</option>`).join('');
+  $('stock').innerHTML = o.stocks.map(s => `<option>${s}</option>`).join('');
+  for (const k of ['startingDate', 'splitingDate', 'endingDate', 'episodes']) $(k).value = o[k];
+}
+
+$('form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const body = Object.fromEntries(new FormData(e.target).entries());
+  const { id } = await api('/api/runs', { method: 'POST', body: JSON.stringify(body) });
+  showLog(id);
+  refreshRuns();
+});
+
+let lastStates = {};
+async function refreshRuns() {
+  const runs = await api('/api/runs');
+  // Un run coché encore en cours (ou qui vient de finir) : on recharge son détail
+  let changed = false;
+  for (const r of runs) {
+    const s = r.status.state;
+    if (selected.has(r.id) && (s === 'running' || s === 'pending' || lastStates[r.id] !== s)) { delete details[r.id]; changed = true; }
+    lastStates[r.id] = s;
+  }
+  if (changed) updateComparison();
+  const head = `<tr><th></th><th>Run</th><th>Stratégie</th><th>Actif</th><th class="num">Ép.</th><th>État</th>
+    <th class="num">Sharpe test</th><th class="num">Rendement annuel test</th><th></th></tr>`;
+  $('runs').innerHTML = head + runs.map(r => {
+    const s = r.status.state, t = r.metrics && r.metrics.test;
+    const check = s === 'done' || s === 'running' || s === 'pending' ? `<input type="checkbox" data-id="${r.id}" ${selected.has(r.id) ? 'checked' : ''} style="width:auto">` : '';
+    const stop = s === 'running' ? `<button class="small" data-stop="${r.id}">arrêter</button>` : '';
+    return `<tr><td>${check}</td><td>${r.id}</td><td>${r.config.strategy}</td><td>${r.config.stock}</td>
+      <td class="num">${r.config.strategy === 'TDQN' ? r.config.episodes : '–'}</td>
+      <td class="state ${s}" title="${r.status.message || ''}">${s}${r.status.duration ? ` (${r.status.duration}s)` : ''}</td>
+      <td class="num">${t ? fmt(t['Sharpe Ratio'], 3) : '–'}</td><td class="num">${t ? fmt(t['Annualized Return (%)']) + ' %' : '–'}</td>
+      <td><button class="small" data-log="${r.id}">journal</button> ${stop}</td></tr>`;
+  }).join('');
+}
+
+$('runs').addEventListener('click', async e => {
+  const t = e.target;
+  if (t.dataset.log) showLog(t.dataset.log);
+  if (t.dataset.stop) { await api(`/api/runs/${t.dataset.stop}/stop`, { method: 'POST' }); refreshRuns(); }
+  if (t.dataset.id) {
+    t.checked ? selected.add(t.dataset.id) : selected.delete(t.dataset.id);
+    await updateComparison();
+  }
+});
+
+let logRun = null;
+async function showLog(id) { logRun = id; $('logName').textContent = id; await refreshLog(); }
+async function refreshLog() {
+  if (!logRun) return;
+  const box = $('log'), atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 5;
+  box.textContent = await api(`/api/runs/${logRun}/log`) || '(vide pour l\'instant)';
+  if (atBottom) box.scrollTop = box.scrollHeight;
+}
+
+$('periodTabs').addEventListener('click', e => {
+  if (!e.target.dataset.period) return;
+  period = e.target.dataset.period;
+  for (const b of $('periodTabs').children) b.classList.toggle('active', b === e.target);
+  updateComparison();
+});
+
+async function updateComparison() {
+  const ids = [...selected];
+  for (const id of ids) if (!details[id]) details[id] = await api(`/api/runs/${id}`);
+  const name = r => `${r.config.label || r.config.strategy} · ${r.config.stock}`;
+  updateCurves(ids.map(id => details[id]).filter(r => r && r.curves), name);
+  const runs = ids.map(id => details[id]).filter(r => r && r[period] && r.metrics);
+
+  // 1. Capital en base 100
+  equityChart.data.datasets = runs.map((r, i) => {
+    const s = r[period], base = s.Money[0];
+    return { label: name(r), borderColor: palette[i % palette.length], backgroundColor: palette[i % palette.length],
+             data: s.Date.map((d, k) => ({ x: d, y: 100 * s.Money[k] / base })), pointRadius: 0, borderWidth: 1.6 };
+  });
+  equityChart.update();
+
+  // 2. Prix et décisions du premier run coché
+  const r = runs[0];
+  $('priceRun').textContent = r ? name(r) : '';
+  if (r) {
+    const s = r[period], points = a => s.Date.map((d, k) => s.Action[k] === a ? { x: d, y: s.Close[k] } : null).filter(Boolean);
+    priceChart.data.datasets = [
+      { label: 'Prix', data: s.Date.map((d, k) => ({ x: d, y: s.Close[k] })), borderColor: '#8a94a6', pointRadius: 0, borderWidth: 1.2 },
+      { label: 'Long', data: points(1), showLine: false, pointStyle: 'triangle', pointRadius: 5, backgroundColor: '#1f9d55', borderColor: '#1f9d55' },
+      { label: 'Short / cash', data: points(-1), showLine: false, pointStyle: 'triangle', rotation: 180, pointRadius: 5, backgroundColor: '#d64545', borderColor: '#d64545' },
+    ];
+  } else priceChart.data.datasets = [];
+  priceChart.update();
+
+  // 3. Tableau des indicateurs, une colonne par run
+  if (!runs.length) { $('metrics').innerHTML = '<tr><td class="hint">Aucun run coché.</td></tr>'; return; }
+  const keys = Object.keys(runs[0].metrics[period]);
+  $('metrics').innerHTML = `<tr><th>${period === 'test' ? 'Test' : 'Entraînement'}</th>${runs.map(r => `<th class="num">${name(r)}</th>`).join('')}</tr>` +
+    keys.map(k => `<tr><td>${k}</td>${runs.map(r => `<td class="num">${fmt(r.metrics[period][k], k.includes('Ratio') || k === 'Skewness' ? 3 : 2)}</td>`).join('')}</tr>`).join('');
+}
+
+// Courbes d'entraînement : abscisse = épisode ou numéro de mise à jour
+function updateCurves(runs, name) {
+  const color = i => palette[i % palette.length];
+  const sharpe = [];
+  let second = null;
+  runs.forEach((r, i) => {
+    for (const [tag, points] of Object.entries(r.curves.scalars || {})) {
+      const isTrain = tag.startsWith('Training');
+      if (!isTrain) second = tag;
+      sharpe.push({ label: `${name(r)} · ${isTrain ? 'entraînement' : tag.startsWith('Validation') ? 'validation' : 'test'}`,
+        data: points.map(([x, y]) => ({ x: x + 1, y })), borderColor: color(i), backgroundColor: color(i),
+        borderDash: isTrain ? [] : [6, 4], pointRadius: 2, borderWidth: 1.6 });
+    }
+  });
+  $('secondTag').textContent = second && second.startsWith('Validation') ? 'période de validation' : 'période de test';
+  sharpeChart.data.datasets = sharpe;
+  sharpeChart.update();
+
+  lossChart.data.datasets = runs.map((r, i) => ({ label: name(r),
+    data: (r.curves.loss || []).map(([x, y]) => ({ x, y })), borderColor: color(i), backgroundColor: color(i),
+    pointRadius: 0, borderWidth: 1.4 }));
+  lossChart.update();
+
+  // TDQN entraîne sur plusieurs copies bruitées de l'environnement : une courbe par copie
+  rewardChart.data.datasets = runs.flatMap((r, i) => (r.curves.rewards || []).map((score, j) => ({
+    label: `${name(r)}${r.curves.rewards.length > 1 ? ' · env ' + (j + 1) : ''}`,
+    data: score.map((y, k) => ({ x: k + 1, y })), borderColor: color(i), backgroundColor: color(i),
+    borderDash: j ? [4, 3] : [], pointRadius: 2, borderWidth: 1.4 })));
+  rewardChart.update();
+
+  $('curvesHint').textContent = runs.length ? '' : 'Coche un run TDQN (en cours ou terminé) pour voir ses courbes. Les runs lancés avant cette version du site n\'en ont pas.';
+}
+
+function makeLinearChart(canvas, xTitle, yTitle) {
+  return new Chart(canvas, {
+    type: 'line', data: { datasets: [] },
+    options: { animation: false, maintainAspectRatio: false,
+      interaction: { mode: 'nearest', intersect: false },
+      scales: { x: { type: 'linear', ticks: { precision: 0 }, title: { display: true, text: xTitle } },
+                y: { title: { display: true, text: yTitle } } },
+      plugins: { legend: { position: 'bottom' } } },
+  });
+}
+
+function makeChart(canvas) {
+  const css = getComputedStyle(document.documentElement);
+  Chart.defaults.color = css.getPropertyValue('--muted').trim();
+  Chart.defaults.borderColor = css.getPropertyValue('--line').trim();
+  return new Chart(canvas, {
+    type: 'line', data: { datasets: [] },
+    options: { animation: false, maintainAspectRatio: false, parsing: true,
+      interaction: { mode: 'nearest', intersect: false },
+      scales: { x: { type: 'time', time: { unit: 'month' } } },
+      plugins: { legend: { position: 'bottom' } } },
+  });
+}
+
+equityChart = makeChart($('equity'));
+priceChart = makeChart($('price'));
+sharpeChart = makeLinearChart($('sharpeCurve'), 'épisode', 'Sharpe');
+lossChart = makeLinearChart($('lossCurve'), 'mises à jour du réseau', 'perte');
+rewardChart = makeLinearChart($('rewardCurve'), 'épisode', 'récompense totale');
+loadOptions();
+refreshRuns();
+updateComparison();
+setInterval(() => { refreshRuns(); refreshLog(); }, 3000);
+</script>
+</body>
+</html>
