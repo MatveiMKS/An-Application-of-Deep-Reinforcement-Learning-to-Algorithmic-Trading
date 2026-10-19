@@ -21,6 +21,8 @@ from matplotlib import pyplot as plt
 ######################### Class PerformanceEstimator ##########################
 ###############################################################################
 
+TRADING_DAYS_PER_YEAR = 365
+
 class PerformanceEstimator:
     """
     GOAL: Accurately estimating the performance of a trading strategy, by
@@ -117,7 +119,7 @@ class PerformanceEstimator:
         """
         
         # Compute the Annualized Volatility (252 trading days in 1 trading year)
-        self.annualizedVolatily = 100 * np.sqrt(252) * self.data['Returns'].std()
+        self.annualizedVolatily = 100 * np.sqrt(TRADING_DAYS_PER_YEAR) * self.data['Returns'].std()
         return self.annualizedVolatily
     
     
@@ -140,7 +142,7 @@ class PerformanceEstimator:
         
         # Compute the Sharpe Ratio (252 trading days in 1 year)
         if expectedReturn != 0 and volatility != 0:
-            self.sharpeRatio = np.sqrt(252) * (expectedReturn - riskFreeRate)/volatility
+            self.sharpeRatio = np.sqrt(TRADING_DAYS_PER_YEAR) * (expectedReturn - riskFreeRate)/volatility
         else:
             self.sharpeRatio = 0
         return self.sharpeRatio
@@ -165,7 +167,7 @@ class PerformanceEstimator:
         
         # Compute the Sortino Ratio (252 trading days in 1 year)
         if expectedReturn != 0 and volatility != 0:
-            self.sortinoRatio = np.sqrt(252) * (expectedReturn - riskFreeRate)/volatility
+            self.sortinoRatio = np.sqrt(TRADING_DAYS_PER_YEAR) * (expectedReturn - riskFreeRate)/volatility
         else:
             self.sortinoRatio = 0
         return self.sortinoRatio
