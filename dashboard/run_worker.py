@@ -143,6 +143,98 @@ def instrumentTDQN():
     tdqnModule.TDQN.plotTraining = plotTraining
 
 
+def applyOptions(config):
+    """
+    Options ajoutées aux étapes 3 à 6 du guide : ce sont des variables globales
+    des modules du dépôt, qu'on modifie ici pour ce run seulement (le worker
+    est un processus à part). Une option absente du code est ignorée, pour que
+    le site marche aussi sur une version plus ancienne du dépôt.
+    Renvoie les valeurs réellement utilisées.
+    """
+    import tradingEnv, dataAugmentation, tradingSimulator
+    used = {}
+
+    def setOption(module, name, value):
+        if value is None or not hasattr(module, name):
+            return
+        setattr(module, name, value)
+        used[name] = value
+
+    # tradingEnv.py (étape 4)
+    mode = config.get('positionMode')
+    if mode and mode in getattr(tradingEnv, 'positionModes', ()):
+        setOption(tradingEnv, 'positionMode', mode)
+    if config.get('dailyShortCost') not in (None, ''):
+        setOption(tradingEnv, 'dailyShortCost', float(config['dailyShortCost']))
+    epsilon = str(config.get('shortEpsilon') or '').strip()
+    if epsilon:
+        setOption(tradingEnv, 'shortEpsilon', 'auto' if epsilon == 'auto' else float(epsilon))
+    if config.get('fractionalShares') is not None:
+        setOption(tradingEnv, 'fractionalShares', bool(config['fractionalShares']))
+
+    # dataAugmentation.py (étape 3) : liste de écarts-types en % du prix
+    noise = str(config.get('noiseRange') or '').strip()
+    if noise:
+        setOption(dataAugmentation, 'noiseRange', [float(x) for x in noise.replace(';', ',').split(',') if x.strip()])
+
+    # tradingSimulator.py (étape 6) : lue au moment de l'appel à simulateNewStrategy
+    if config.get('validationDate'):
+        setOption(tradingSimulator, 'validationDate', config['validationDate'])
+
+    return used
+
+
+def marketSymbol(stockName):
+    """Symbole Yahoo d'un actif du simulateur (None pour les actifs fictifs)."""
+    import tradingSimulator as ts
+    for name in ('cryptos', 'indices', 'companies', 'stocks'):
+        table = getattr(ts, name, {})
+        if stockName in table:
+            return table[stockName]
+    return None
+
+
+def csvRange(path):
+    """(première date, dernière date) d'un CSV de Data/, ou None s'il est vide ou illisible."""
+    import pandas as pd
+    try:
+        data = pd.read_csv(path, header=0, index_col='Timestamp', parse_dates=True)
+    except Exception:
+        return None
+    if data.empty:
+        return None
+    return data.index[0], data.index[-1]
+
+
+def prepareData(symbol, ranges):
+    """
+    Le code du dépôt cherche un fichier Data/<symbole>_<début>_<fin>.csv par
+    période et le télécharge sur Yahoo s'il n'existe pas. Avec la validation
+    (étape 6), il faut de nouvelles périodes (2017-2022 et 2022-2023), et
+    yfinance 0.2.57 se fait souvent refuser par Yahoo (faux « rate limit »),
+    ce qui laisse un CSV vide. On construit donc ces fichiers à partir des CSV
+    déjà téléchargés qui couvrent la période. Un CSV vide est remplacé de la
+    même façon. Sans source qui couvre la période, on laisse le code télécharger.
+    """
+    import glob
+    import pandas as pd
+    for start, end in ranges:
+        target = os.path.join('Data', '{}_{}_{}.csv'.format(symbol, start, end))
+        if os.path.isfile(target) and csvRange(target) is not None:
+            continue
+        first, last = pd.Timestamp(start), pd.Timestamp(end)
+        for source in glob.glob(os.path.join('Data', symbol + '_*.csv')):
+            span = csvRange(source)
+            if source == target or span is None:
+                continue
+            # Yahoo exclut la date de fin : la source doit aller jusqu'à la veille
+            if span[0] <= first + pd.Timedelta(days=4) and span[1] >= last - pd.Timedelta(days=4):
+                data = pd.read_csv(source, header=0, index_col='Timestamp', parse_dates=True)
+                data[(data.index >= first) & (data.index < last)].to_csv(target)
+                print('Données : {} construit à partir de {}'.format(target, source))
+                break
+
+
 def saveActivity(env, name):
     columns = ['Close', 'Position', 'Action', 'Cash', 'Holdings', 'Money', 'Returns']
     env.data[columns].to_csv(os.path.join(RUN_DIR, name), index_label='Date')
@@ -151,15 +243,47 @@ def saveActivity(env, name):
 def main():
     with open(os.path.join(RUN_DIR, 'config.json')) as f:
         config = json.load(f)
-    writeStatus('running', pid=os.getpid())
     start = time.time()
+    writeStatus('running', pid=os.getpid(), started=start)
 
     try:
+        import tradingSimulator as ts
         from tradingSimulator import TradingSimulator
+        used = applyOptions(config)
+        writeStatus('running', pid=os.getpid(), started=start, options=used)
+        print('Options du run : ' + json.dumps(used))
+
+        # Graine : rend le run reproductible (exploration, mélange de la mémoire de
+        # rejeu, bruit d'augmentation, poids initiaux du réseau)
+        if config.get('seed') is not None:
+            import random
+            import numpy as np
+            seed = int(config['seed'])
+            random.seed(seed)
+            np.random.seed(seed)
+            try:
+                import torch
+                torch.manual_seed(seed)
+            except ImportError:
+                pass
+            print('Graine : {}'.format(seed))
+
+        symbol = marketSymbol(config['stock'])
+        if symbol:
+            dates = [config['startingDate'], config['splitingDate'], config['endingDate']]
+            validation = getattr(ts, 'validationDate', None)
+            ranges = [(dates[0], dates[1]), (dates[1], dates[2])]
+            if validation:
+                ranges += [(dates[0], validation), (validation, dates[1])]
+            prepareData(symbol, ranges)
+
         isTDQN = config['strategy'] == 'TDQN'
         if isTDQN:
             instrumentTDQN()
         simulator = TradingSimulator()
+        extra = {}
+        if config.get('transactionCosts') not in (None, ''):
+            extra['transactionCosts'] = float(config['transactionCosts']) / 100
         _, trainingEnv, testingEnv = simulator.simulateNewStrategy(
             config['strategy'], config['stock'],
             startingDate=config['startingDate'],
@@ -170,7 +294,7 @@ def main():
             # (plus lent) et nous transmet les courbes ; les stratégies
             # classiques n'en ont pas besoin
             verbose=True, plotTraining=isTDQN, rendering=False,
-            showPerformance=True, saveStrategy=False)
+            showPerformance=True, saveStrategy=False, **extra)
 
         saveActivity(trainingEnv, 'train.csv')
         saveActivity(testingEnv, 'test.csv')
@@ -178,7 +302,7 @@ def main():
             json.dump({'train': metrics(trainingEnv.data), 'test': metrics(testingEnv.data)}, f, indent=2)
         if isTDQN:
             curves.save()
-        writeStatus('done', duration=round(time.time() - start))
+        writeStatus('done', duration=round(time.time() - start), options=used)
 
     except BaseException as error:
         traceback.print_exc()

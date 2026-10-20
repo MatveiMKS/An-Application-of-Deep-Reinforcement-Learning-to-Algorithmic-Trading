@@ -620,7 +620,8 @@ class TDQN:
 
 
     def training(self, trainingEnv, trainingParameters=[],
-                 verbose=False, rendering=False, plotTraining=False, showPerformance=False):
+                verbose=False, rendering=False, plotTraining=False, showPerformance=False,
+                validationEnv=None):
         """
         GOAL: Train the RL trading agent by interacting with its trading environment.
         
@@ -648,19 +649,18 @@ class TDQN:
         trainingEnvList = dataAugmentation.generate(trainingEnv)
 
         # Initialization of some variables tracking the training and testing performances
+                # Initialization of some variables tracking the training performance
         if plotTraining:
             # Training performance
             performanceTrain = []
             score = np.zeros((len(trainingEnvList), trainingParameters[0]))
-            # Testing performance
             marketSymbol = trainingEnv.marketSymbol
-            startingDate = trainingEnv.endingDate
-            endingDate = '2025-1-1'
-            money = trainingEnv.data['Money'][0]
-            stateLength = trainingEnv.stateLength
-            transactionCosts = trainingEnv.transactionCosts
-            testingEnv = TradingEnv(marketSymbol, startingDate, endingDate, money, stateLength, transactionCosts)
-            performanceTest = []
+
+        # ADAPTATION : validation performance and best weights
+        performanceValidation = []
+        bestPerformance = -float('inf')
+        bestWeights = None
+        bestEpisode = None
 
         try:
             # If required, print the training progression
@@ -735,13 +735,18 @@ class TDQN:
                     performanceTrain.append(performance)
                     self.writer.add_scalar('Training performance (Sharpe Ratio)', performance, episode)
                     trainingEnv.reset()
-                    # Testing set performance
-                    testingEnv = self.testing(trainingEnv, testingEnv)
-                    analyser = PerformanceEstimator(testingEnv.data)
+                                # ADAPTATION : validation set performance, keep the best weights
+                if validationEnv is not None:
+                    validationEnv = self.testing(trainingEnv, validationEnv)
+                    analyser = PerformanceEstimator(validationEnv.data)
                     performance = analyser.computeSharpeRatio()
-                    performanceTest.append(performance)
-                    self.writer.add_scalar('Testing performance (Sharpe Ratio)', performance, episode)
-                    testingEnv.reset()
+                    performanceValidation.append(performance)
+                    self.writer.add_scalar('Validation performance (Sharpe Ratio)', performance, episode)
+                    validationEnv.reset()
+                    if performance > bestPerformance:
+                        bestPerformance = performance
+                        bestWeights = copy.deepcopy(self.policyNetwork.state_dict())
+                        bestEpisode = episode
         
         except KeyboardInterrupt:
             print()
@@ -749,6 +754,12 @@ class TDQN:
             print()
             self.policyNetwork.eval()
 
+                # ADAPTATION : restore the weights of the best validation episode
+        if bestWeights is not None:
+            self.policyNetwork.load_state_dict(bestWeights)
+            self.targetNetwork.load_state_dict(bestWeights)
+            if verbose:
+                print("Best validation Sharpe ratio: {:.3f} (episode {})".format(bestPerformance, bestEpisode + 1))
         # Assess the algorithm performance on the training trading environment
         trainingEnv = self.testing(trainingEnv, trainingEnv)
 
@@ -761,9 +772,9 @@ class TDQN:
             fig = plt.figure()
             ax = fig.add_subplot(111, ylabel='Performance (Sharpe Ratio)', xlabel='Episode')
             ax.plot(performanceTrain)
-            ax.plot(performanceTest)
-            ax.legend(["Training", "Testing"])
-            plt.savefig(''.join(['Figures/', str(marketSymbol), '_TrainingTestingPerformance', '.png']))
+            ax.plot(performanceValidation)
+            ax.legend(["Training", "Validation"])
+            plt.savefig(''.join(['Figures/', str(marketSymbol), '_TrainingValidationPerformance', '.png']))
             #plt.show()
             for i in range(len(trainingEnvList)):
                 self.plotTraining(score[i][:episode], marketSymbol)

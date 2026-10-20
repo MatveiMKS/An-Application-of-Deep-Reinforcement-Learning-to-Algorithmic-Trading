@@ -2,20 +2,22 @@
 python==3.7.4
 
 # Python libraries
-numpy
+numpy==1.19.2
 scipy
 matplotlib
-pandas
+pandas==1.3.5            # < 2 : le code écrit data['Cash'][t] = ... (affectation en chaîne)
 seaborn
 statsmodels
-pandas-datareader
+pandas-datareader==0.10.0  # encore importé par dataDownloader.py, mais plus utilisé
+yfinance==0.2.57         # téléchargement Yahoo ; dernière version compatible Python 3.7
+multitasking==0.0.11     # dépendance de yfinance ; 0.0.12+ exige Python 3.8
 requests
 tqdm
 tabulate
 
 # Deep Learning framework
-pytorch
+pytorch==1.5.1
 tensorboard
 
 # OpenAI Gym RL framework
-gym
+gym==0.17.3

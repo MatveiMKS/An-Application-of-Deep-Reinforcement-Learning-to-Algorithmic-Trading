@@ -10,3 +10,10 @@ dashboard/runs/
 
 # Downloaded market data
 Data/*.csv
+
+# Generated images and reports
+Figures/
+Reports/
+reports/
+*.pdf
+*.docx

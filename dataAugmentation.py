@@ -25,7 +25,7 @@ from tradingEnv import TradingEnv
 shiftRange = [0]
 stretchRange = [1]
 filterRange = [5]
-noiseRange = [0]
+noiseRange = [0, 0.5]
 
 
 
@@ -124,8 +124,8 @@ class DataAugmentation:
             # Generation of artificial gaussian random noises
             price = newTradingEnv.data['Close'][i]
             volume = newTradingEnv.data['Volume'][i]
-            priceNoise = np.random.normal(0, stdev*(price/100))
-            volumeNoise = np.random.normal(0, stdev*(volume/100))
+            priceNoise = np.random.normal(0, stdev)
+            volumeNoise = np.random.normal(0, stdev)
 
             # Addition of the artificial noise generated
             newTradingEnv.data['Close'][i] *= (1 + priceNoise/100)

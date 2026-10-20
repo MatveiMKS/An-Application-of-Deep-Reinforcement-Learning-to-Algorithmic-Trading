@@ -37,6 +37,11 @@ saving = True
 # Variable related to the fictive stocks supported
 fictiveStocks = ('LINEARUP', 'LINEARDOWN', 'SINUSOIDAL', 'TRIANGLE')
 
+positionMode = 'longShort'
+positionModes = ('longShort', 'longShortFunding', 'longCash')
+dailyShortCost = 0.0003
+shortEpsilon = 'auto'
+fractionalShares = True
 
 
 ###############################################################################
@@ -150,7 +155,14 @@ class TradingEnv(gym.Env):
         self.t = stateLength
         self.numberOfShares = 0
         self.transactionCosts = transactionCosts
-        self.epsilon = 0.1
+
+        if positionMode not in positionModes:
+            raise SystemExit("Unknown position mode: " + str(positionMode))
+        self.positionMode = positionMode
+        if shortEpsilon == 'auto':
+            self.epsilon = self.maximumPriceIncrease()
+        else:
+            self.epsilon = shortEpsilon
 
         # If required, set a custom starting point for the trading activity
         if startingPoint:
@@ -211,12 +223,135 @@ class TradingEnv(gym.Env):
         return lowerBound
     
 
+    def maximumPriceIncrease(self):
+        """
+        GOAL: Compute the largest relative increase of the close price between
+              two consecutive time steps of the trading data (ADAPTATION BTC).
+        
+        INPUTS: /
+        
+        OUTPUTS: - epsilon: Largest relative price increase (at least 0.1, as
+                            in the original code).
+        """
+
+        increase = self.data['Close'].pct_change().max()
+        if np.isnan(increase):
+            increase = 0
+        return max(0.1, float(increase))
+
+
+    def quantity(self, x):
+        """
+        GOAL: Round a number of shares, down to an integer if fractional
+              quantities are not allowed (ADAPTATION BTC).
+        """
+
+        return x if fractionalShares else math.floor(x)
+
+
+    def computeTransition(self, action, t, numberOfShares):
+        """
+        GOAL: Compute the outcome of a trading decision at time step t, without
+              modifying the environment. Used for both the action executed and
+              the other action (exploration trick), which fixes an error of the
+              original code where the other action used the updated number of
+              shares instead of the previous one (ADAPTATION).
+        
+        INPUTS: - action: Trading decision (1 = long, 0 = short or cash).
+                - t: Current trading time step.
+                - numberOfShares: Number of shares owned before the decision.
+        
+        OUTPUTS: - position: New trading position (1, -1 or 0).
+                 - cash: New cash value.
+                 - holdings: New value of the shares owned.
+                 - numberOfShares: New number of shares owned.
+                 - customReward: Whether the reward is the special one of a
+                                 forced partial closing of a short position.
+        """
+
+        price = self.data['Close'][t]
+        previousPrice = self.data['Close'][t-1]
+        previousPosition = self.data['Position'][t-1]
+        cash = self.data['Cash'][t-1]
+        customReward = False
+
+        # ADAPTATION BTC : cost of borrowing the shares of a short position
+        if self.positionMode == 'longShortFunding' and previousPosition == -1:
+            cash -= dailyShortCost * numberOfShares * previousPrice
+
+        # CASE 1: LONG POSITION
+        if(action == 1):
+            position = 1
+            # Case a: Long -> Long
+            if(previousPosition == 1):
+                pass
+            # Case b: No position -> Long
+            elif(previousPosition == 0):
+                numberOfShares = self.quantity(cash/(price * (1 + self.transactionCosts)))
+                cash = cash - numberOfShares * price * (1 + self.transactionCosts)
+            # Case c: Short -> Long
+            else:
+                cash = cash - numberOfShares * price * (1 + self.transactionCosts)
+                numberOfShares = self.quantity(cash/(price * (1 + self.transactionCosts)))
+                cash = cash - numberOfShares * price * (1 + self.transactionCosts)
+            holdings = numberOfShares * price
+
+        # CASE 2: CASH POSITION (ADAPTATION BTC, 'longCash' mode)
+        elif(action == 0 and self.positionMode == 'longCash'):
+            position = 0
+            # Case a: Long -> Cash
+            if(previousPosition == 1):
+                cash = cash + numberOfShares * price * (1 - self.transactionCosts)
+            numberOfShares = 0
+            holdings = 0.
+
+        # CASE 3: SHORT POSITION
+        elif(action == 0):
+            position = -1
+            # Case a: Short -> Short
+            if(previousPosition == -1):
+                lowerBound = self.computeLowerBound(cash, -numberOfShares, previousPrice)
+                if lowerBound > 0:
+                    numberOfSharesToBuy = min(self.quantity(lowerBound), numberOfShares)
+                    numberOfShares -= numberOfSharesToBuy
+                    cash = cash - numberOfSharesToBuy * price * (1 + self.transactionCosts)
+                    customReward = True
+            # Case b: No position -> Short
+            elif(previousPosition == 0):
+                numberOfShares = self.quantity(cash/(price * (1 + self.transactionCosts)))
+                cash = cash + numberOfShares * price * (1 - self.transactionCosts)
+            # Case c: Long -> Short
+            else:
+                cash = cash + numberOfShares * price * (1 - self.transactionCosts)
+                numberOfShares = self.quantity(cash/(price * (1 + self.transactionCosts)))
+                cash = cash + numberOfShares * price * (1 - self.transactionCosts)
+            holdings = - numberOfShares * price
+
+        # CASE 4: PROHIBITED ACTION
+        else:
+            raise SystemExit("Prohibited action! Action should be either 1 (long) or 0 (short or cash).")
+
+        return position, cash, holdings, numberOfShares, customReward
+
+
+    def computeReward(self, t, money, customReward):
+        """
+        GOAL: Compute the RL reward, as in the original code: the relative
+              change of the portfolio value, except for a forced partial
+              closing of a short position.
+        """
+
+        if not customReward:
+            return (money - self.data['Money'][t-1])/self.data['Money'][t-1]
+        return (self.data['Close'][t-1] - self.data['Close'][t])/self.data['Close'][t-1]
+
+
     def step(self, action):
         """
         GOAL: Transition to the next trading time step based on the
-              trading position decision made (either long or short).
+              trading position decision made (either long or short/cash).
         
-        INPUTS: - action: Trading decision (1 = long, 0 = short).    
+        INPUTS: - action: Trading decision (1 = long, 0 = short or cash).    
         
         OUTPUTS: - state: RL state to be returned to the RL agent.
                  - reward: RL reward to be returned to the RL agent.
@@ -227,71 +362,21 @@ class TradingEnv(gym.Env):
         # Stting of some local variables
         t = self.t
         numberOfShares = self.numberOfShares
-        customReward = False
 
-        # CASE 1: LONG POSITION
-        if(action == 1):
-            self.data['Position'][t] = 1
-            # Case a: Long -> Long
-            if(self.data['Position'][t - 1] == 1):
-                self.data['Cash'][t] = self.data['Cash'][t - 1]
-                self.data['Holdings'][t] = self.numberOfShares * self.data['Close'][t]
-            # Case b: No position -> Long
-            elif(self.data['Position'][t - 1] == 0):
-                self.numberOfShares = math.floor(self.data['Cash'][t - 1]/(self.data['Close'][t] * (1 + self.transactionCosts)))
-                self.data['Cash'][t] = self.data['Cash'][t - 1] - self.numberOfShares * self.data['Close'][t] * (1 + self.transactionCosts)
-                self.data['Holdings'][t] = self.numberOfShares * self.data['Close'][t]
-                self.data['Action'][t] = 1
-            # Case c: Short -> Long
-            else:
-                self.data['Cash'][t] = self.data['Cash'][t - 1] - self.numberOfShares * self.data['Close'][t] * (1 + self.transactionCosts)
-                self.numberOfShares = math.floor(self.data['Cash'][t]/(self.data['Close'][t] * (1 + self.transactionCosts)))
-                self.data['Cash'][t] = self.data['Cash'][t] - self.numberOfShares * self.data['Close'][t] * (1 + self.transactionCosts)
-                self.data['Holdings'][t] = self.numberOfShares * self.data['Close'][t]
-                self.data['Action'][t] = 1
-
-        # CASE 2: SHORT POSITION
-        elif(action == 0):
-            self.data['Position'][t] = -1
-            # Case a: Short -> Short
-            if(self.data['Position'][t - 1] == -1):
-                lowerBound = self.computeLowerBound(self.data['Cash'][t - 1], -numberOfShares, self.data['Close'][t-1])
-                if lowerBound <= 0:
-                    self.data['Cash'][t] = self.data['Cash'][t - 1]
-                    self.data['Holdings'][t] =  - self.numberOfShares * self.data['Close'][t]
-                else:
-                    numberOfSharesToBuy = min(math.floor(lowerBound), self.numberOfShares)
-                    self.numberOfShares -= numberOfSharesToBuy
-                    self.data['Cash'][t] = self.data['Cash'][t - 1] - numberOfSharesToBuy * self.data['Close'][t] * (1 + self.transactionCosts)
-                    self.data['Holdings'][t] =  - self.numberOfShares * self.data['Close'][t]
-                    customReward = True
-            # Case b: No position -> Short
-            elif(self.data['Position'][t - 1] == 0):
-                self.numberOfShares = math.floor(self.data['Cash'][t - 1]/(self.data['Close'][t] * (1 + self.transactionCosts)))
-                self.data['Cash'][t] = self.data['Cash'][t - 1] + self.numberOfShares * self.data['Close'][t] * (1 - self.transactionCosts)
-                self.data['Holdings'][t] = - self.numberOfShares * self.data['Close'][t]
-                self.data['Action'][t] = -1
-            # Case c: Long -> Short
-            else:
-                self.data['Cash'][t] = self.data['Cash'][t - 1] + self.numberOfShares * self.data['Close'][t] * (1 - self.transactionCosts)
-                self.numberOfShares = math.floor(self.data['Cash'][t]/(self.data['Close'][t] * (1 + self.transactionCosts)))
-                self.data['Cash'][t] = self.data['Cash'][t] + self.numberOfShares * self.data['Close'][t] * (1 - self.transactionCosts)
-                self.data['Holdings'][t] = - self.numberOfShares * self.data['Close'][t]
-                self.data['Action'][t] = -1
-
-        # CASE 3: PROHIBITED ACTION
-        else:
-            raise SystemExit("Prohibited action! Action should be either 1 (long) or 0 (short).")
+        # Transition related to the action executed
+        position, cash, holdings, self.numberOfShares, customReward = self.computeTransition(action, t, numberOfShares)
+        if position != self.data['Position'][t-1]:
+            self.data['Action'][t] = 1 if position == 1 else -1
+        self.data['Position'][t] = position
+        self.data['Cash'][t] = cash
+        self.data['Holdings'][t] = holdings
 
         # Update the total amount of money owned by the agent, as well as the return generated
         self.data['Money'][t] = self.data['Holdings'][t] + self.data['Cash'][t]
         self.data['Returns'][t] = (self.data['Money'][t] - self.data['Money'][t-1])/self.data['Money'][t-1]
 
         # Set the RL reward returned to the trading agent
-        if not customReward:
-            self.reward = self.data['Returns'][t]
-        else:
-            self.reward = (self.data['Close'][t-1] - self.data['Close'][t])/self.data['Close'][t-1]
+        self.reward = self.computeReward(t, self.data['Money'][t], customReward)
 
         # Transition to the next trading time step
         self.t = self.t + 1
@@ -305,48 +390,8 @@ class TradingEnv(gym.Env):
 
         # Same reasoning with the other action (exploration trick)
         otherAction = int(not bool(action))
-        customReward = False
-        if(otherAction == 1):
-            otherPosition = 1
-            if(self.data['Position'][t - 1] == 1):
-                otherCash = self.data['Cash'][t - 1]
-                otherHoldings = numberOfShares * self.data['Close'][t]
-            elif(self.data['Position'][t - 1] == 0):
-                numberOfShares = math.floor(self.data['Cash'][t - 1]/(self.data['Close'][t] * (1 + self.transactionCosts)))
-                otherCash = self.data['Cash'][t - 1] - numberOfShares * self.data['Close'][t] * (1 + self.transactionCosts)
-                otherHoldings = numberOfShares * self.data['Close'][t]
-            else:
-                otherCash = self.data['Cash'][t - 1] - numberOfShares * self.data['Close'][t] * (1 + self.transactionCosts)
-                numberOfShares = math.floor(otherCash/(self.data['Close'][t] * (1 + self.transactionCosts)))
-                otherCash = otherCash - numberOfShares * self.data['Close'][t] * (1 + self.transactionCosts)
-                otherHoldings = numberOfShares * self.data['Close'][t]
-        else:
-            otherPosition = -1
-            if(self.data['Position'][t - 1] == -1):
-                lowerBound = self.computeLowerBound(self.data['Cash'][t - 1], -numberOfShares, self.data['Close'][t-1])
-                if lowerBound <= 0:
-                    otherCash = self.data['Cash'][t - 1]
-                    otherHoldings =  - numberOfShares * self.data['Close'][t]
-                else:
-                    numberOfSharesToBuy = min(math.floor(lowerBound), numberOfShares)
-                    numberOfShares -= numberOfSharesToBuy
-                    otherCash = self.data['Cash'][t - 1] - numberOfSharesToBuy * self.data['Close'][t] * (1 + self.transactionCosts)
-                    otherHoldings =  - numberOfShares * self.data['Close'][t]
-                    customReward = True
-            elif(self.data['Position'][t - 1] == 0):
-                numberOfShares = math.floor(self.data['Cash'][t - 1]/(self.data['Close'][t] * (1 + self.transactionCosts)))
-                otherCash = self.data['Cash'][t - 1] + numberOfShares * self.data['Close'][t] * (1 - self.transactionCosts)
-                otherHoldings = - numberOfShares * self.data['Close'][t]
-            else:
-                otherCash = self.data['Cash'][t - 1] + numberOfShares * self.data['Close'][t] * (1 - self.transactionCosts)
-                numberOfShares = math.floor(otherCash/(self.data['Close'][t] * (1 + self.transactionCosts)))
-                otherCash = otherCash + numberOfShares * self.data['Close'][t] * (1 - self.transactionCosts)
-                otherHoldings = - self.numberOfShares * self.data['Close'][t]
-        otherMoney = otherHoldings + otherCash
-        if not customReward:
-            otherReward = (otherMoney - self.data['Money'][t-1])/self.data['Money'][t-1]
-        else:
-            otherReward = (self.data['Close'][t-1] - self.data['Close'][t])/self.data['Close'][t-1]
+        otherPosition, otherCash, otherHoldings, _, otherCustomReward = self.computeTransition(otherAction, t, numberOfShares)
+        otherReward = self.computeReward(t, otherHoldings + otherCash, otherCustomReward)
         otherState = [self.data['Close'][self.t - self.stateLength : self.t].tolist(),
                       self.data['Low'][self.t - self.stateLength : self.t].tolist(),
                       self.data['High'][self.t - self.stateLength : self.t].tolist(),
@@ -356,7 +401,6 @@ class TradingEnv(gym.Env):
 
         # Return the trading environment feedback to the RL trading agent
         return self.state, self.reward, self.done, self.info
-
 
     def render(self):
         """

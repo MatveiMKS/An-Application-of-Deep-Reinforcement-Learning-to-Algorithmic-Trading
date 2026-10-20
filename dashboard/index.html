@@ -19,7 +19,7 @@
   body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
   header { padding: 14px 24px; border-bottom: 1px solid var(--line); background: var(--panel); }
   header h1 { margin: 0; font-size: 18px; }
-  main { display: grid; grid-template-columns: 340px 1fr; gap: 16px; padding: 16px 24px; }
+  main { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 16px; padding: 16px 24px; }
   @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
   section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; margin-bottom: 16px; }
   h2 { font-size: 15px; margin: 0 0 10px; }
@@ -32,6 +32,7 @@
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
   th { color: var(--muted); font-weight: 500; }
+  td.opts { white-space: normal; min-width: 180px; }
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   .state { font-weight: 600; }
   .state.done { color: var(--ok); } .state.error, .state.unknown { color: var(--err); } .state.running, .state.pending { color: var(--run); }
@@ -40,6 +41,17 @@
   .chartbox { position: relative; height: 320px; }
   .hint { color: var(--muted); font-size: 12px; }
   pre { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px; max-height: 260px; overflow: auto; font-size: 12px; white-space: pre-wrap; }
+  details summary { cursor: pointer; margin-top: 12px; font-weight: 600; font-size: 13px; }
+  label.check { display: flex; align-items: center; gap: 6px; color: var(--text); font-size: 13px; }
+  label.check input { width: auto; }
+  tr.section td { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; padding-top: 12px; }
+  .bar { height: 4px; background: var(--line); border-radius: 2px; margin-top: 3px; min-width: 90px; }
+  .bar > div { height: 100%; background: var(--run); border-radius: 2px; }
+  .state.queued, .state.stopped { color: var(--muted); }
+  code { font-size: 12px; }
+  .groupHead { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+  .groupHead select { width: auto; }
+  .groupHead button { width: auto; margin: 0; padding: 4px 10px; font-weight: 500; }
   .tabs { display: flex; gap: 6px; margin-bottom: 8px; }
   .tabs button { width: auto; margin: 0; padding: 4px 10px; background: transparent; color: var(--text); border-color: var(--line); font-weight: 500; }
   .tabs button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
@@ -61,9 +73,37 @@
         </div>
         <label>Fin test</label><input name="endingDate" id="endingDate">
         <label>Nom (facultatif)</label><input name="label" placeholder="ex. tdqn-50ep">
+        <details id="advanced" open>
+          <summary>Options (étapes 3 à 6)</summary>
+          <div data-opt="positionMode"><label>Action 0 (tradingEnv.positionMode)</label>
+            <select name="positionMode" id="positionMode"></select></div>
+          <div data-opt="dailyShortCost"><label>Coût d'emprunt du short, par jour (0.0003 ≈ 11 %/an)</label>
+            <input name="dailyShortCost" id="dailyShortCost" type="number" step="0.0001" min="0"></div>
+          <div class="row">
+            <div data-opt="shortEpsilon"><label>Hausse max. (epsilon)</label><input name="shortEpsilon" id="shortEpsilon" placeholder="auto ou 0.1"></div>
+            <div data-opt="transactionCosts"><label>Frais (% par ordre)</label><input name="transactionCosts" id="transactionCosts" type="number" step="0.01" min="0"></div>
+          </div>
+          <div class="row">
+            <div data-opt="noiseRange"><label>Bruit (écarts-types en %)</label><input name="noiseRange" id="noiseRange" placeholder="0, 0.5"></div>
+            <div data-opt="validationDate"><label>Début validation (TDQN)</label><input name="validationDate" id="validationDate"></div>
+          </div>
+          <div data-opt="fractionalShares"><label class="check"><input type="checkbox" name="fractionalShares" id="fractionalShares"> Quantités fractionnaires</label></div>
+          <p class="hint">Valeurs par défaut lues dans ton code. Elles ne s'appliquent qu'au run lancé, sans modifier tes fichiers.</p>
+        </details>
+        <details id="multi" open>
+          <summary>Répétitions et balayage</summary>
+          <div class="row">
+            <div><label>Répétitions (graines)</label><input name="repeats" id="repeats" type="number" min="1" max="50" value="1"></div>
+            <div><label>Graine de départ</label><input name="seed" id="seed" type="number" placeholder="aléatoire"></div>
+          </div>
+          <label>Paramètre balayé</label>
+          <select name="sweepKey" id="sweepKey"></select>
+          <div id="sweepBox" hidden><label>Valeurs, séparées par « ; »</label><input name="sweepValues" id="sweepValues"></div>
+          <p class="hint" id="launchCount"></p>
+        </details>
         <button type="submit">Lancer</button>
       </form>
-      <p class="hint">Chaque run tourne dans un processus séparé ; tu peux en lancer plusieurs.</p>
+      <p class="hint">Les runs passent par une file d'attente : quelques-uns tournent en même temps (2 par défaut, <code>--parallel N</code> au lancement du site), les autres attendent.</p>
     </section>
     <section>
       <h2>Journal <span id="logName" class="hint"></span></h2>
@@ -76,6 +116,17 @@
       <h2>Runs</h2>
       <div class="scroll"><table id="runs"></table></div>
       <p class="hint">Coche des runs pour les comparer. Un run en cours peut être coché : ses courbes d'entraînement se mettent à jour pendant qu'il tourne.</p>
+    </section>
+    <section id="groups">
+      <h2>Répétitions et balayages</h2>
+      <div class="groupHead">
+        <select id="groupSelect"></select>
+        <button id="groupCheck">Cocher ce groupe</button>
+      </div>
+      <div class="scroll"><table id="groupTable"></table></div>
+      <h3 class="hint" style="margin-top:14px">Capital moyen sur la période de test (base 100), par variante ; la zone colorée couvre ± 1 écart-type entre les graines</h3>
+      <div class="chartbox"><canvas id="groupEquity"></canvas></div>
+      <p class="hint">Moyenne ± écart-type sur les runs terminés du groupe. « Sharpe validation » est le meilleur Sharpe de validation de chaque run, c'est-à-dire celui de l'épisode retenu.</p>
     </section>
     <section>
       <div class="tabs" id="periodTabs">
@@ -127,17 +178,99 @@ async function loadOptions() {
   $('strategy').innerHTML = o.strategies.map(s => `<option>${s}</option>`).join('');
   $('stock').innerHTML = o.stocks.map(s => `<option>${s}</option>`).join('');
   for (const k of ['startingDate', 'splitingDate', 'endingDate', 'episodes']) $(k).value = o[k];
+  // Options avancées : masquées si ton code ne les a pas
+  $('positionMode').innerHTML = (o.positionModes || []).map(m => `<option value="${m}">${modeNames[m] || m}</option>`).join('');
+  for (const box of document.querySelectorAll('[data-opt]')) {
+    const k = box.dataset.opt, v = o[k];
+    box.hidden = v === null || v === undefined;
+    if (box.hidden) continue;
+    if (k === 'fractionalShares') $(k).checked = !!v; else $(k).value = v;
+  }
+  shortCostAvailable = o.dailyShortCost !== null && o.dailyShortCost !== undefined;
+  toggleShortCost();
+  const sweepable = Object.keys(sweepInfo).filter(k => k === 'episodes' || (o[k] !== null && o[k] !== undefined));
+  $('sweepKey').innerHTML = '<option value="">aucun</option>' +
+    sweepable.map(k => `<option value="${k}">${sweepInfo[k][0]}</option>`).join('');
+  updateSweep();
 }
+// Paramètres balayables : libellé et exemple de valeurs
+const sweepInfo = {
+  noiseRange: ['Bruit', '0 ; 0, 0.5 ; 0, 1'],
+  positionMode: ['Action 0 (mode)', 'longShort ; longShortFunding ; longCash'],
+  dailyShortCost: ['Coût d\'emprunt', '0.0001 ; 0.0003 ; 0.001'],
+  shortEpsilon: ['Epsilon', '0.1 ; auto'],
+  transactionCosts: ['Frais (%)', '0 ; 0.1 ; 0.2'],
+  fractionalShares: ['Quantités fractionnaires', 'oui ; non'],
+  validationDate: ['Début validation', '2021-1-1 ; 2022-1-1'],
+  episodes: ['Épisodes', '10 ; 25 ; 50'],
+};
+function updateSweep() {
+  const k = $('sweepKey').value;
+  $('sweepBox').hidden = !k;
+  if (k) $('sweepValues').placeholder = sweepInfo[k][1];
+  const values = k ? $('sweepValues').value.split(';').filter(v => v.trim()).length || 1 : 1;
+  const n = values * Math.max(1, Number($('repeats').value) || 1);
+  $('launchCount').textContent = n > 1 ? `${n} runs seront créés (${values} valeur${values > 1 ? 's' : ''} × ${n / values} graine${n / values > 1 ? 's' : ''}), regroupés pour la synthèse.` : '';
+}
+for (const id of ['sweepKey', 'sweepValues', 'repeats']) $(id).addEventListener('input', updateSweep);
+const modeNames = { longShort: 'short (papier)', longShortFunding: 'short avec coût d\'emprunt', longCash: 'cash (pas de short)' };
+let shortCostAvailable = false;
+function toggleShortCost() {
+  // le coût d'emprunt n'a de sens qu'en mode longShortFunding
+  document.querySelector('[data-opt="dailyShortCost"]').hidden =
+    !shortCostAvailable || $('positionMode').value !== 'longShortFunding';
+}
+$('positionMode').addEventListener('change', toggleShortCost);
+
+// Résumé des options d'un run (les runs anciens n'en ont pas)
+function optionText(c) {
+  const parts = [];
+  if (c.positionMode) parts.push(modeNames[c.positionMode] || c.positionMode);
+  if (c.positionMode === 'longShortFunding') parts.push(`emprunt ${c.dailyShortCost}/j`);
+  if (c.noiseRange !== undefined) parts.push(`bruit [${c.noiseRange}]`);
+  if (c.strategy === 'TDQN' && c.validationDate) parts.push(`val. ${c.validationDate}`);
+  return parts.join(' · ') || '–';
+}
+const optionRows = [
+  ['Action 0', c => c.positionMode ? (modeNames[c.positionMode] || c.positionMode) : null],
+  ['Coût d\'emprunt / jour', c => c.positionMode === 'longShortFunding' ? c.dailyShortCost : null],
+  ['Epsilon (shorts)', c => c.shortEpsilon],
+  ['Frais (%)', c => c.transactionCosts],
+  ['Quantités fractionnaires', c => c.fractionalShares === undefined ? null : (c.fractionalShares ? 'oui' : 'non')],
+  ['Bruit', c => c.noiseRange === undefined ? null : `[${c.noiseRange}]`],
+  ['Validation', c => c.strategy === 'TDQN' && c.validationDate ? `${c.validationDate} → ${c.splitingDate}` : null],
+  ['Épisodes', c => c.strategy === 'TDQN' ? c.episodes : null],
+];
 
 $('form').addEventListener('submit', async e => {
   e.preventDefault();
   const body = Object.fromEntries(new FormData(e.target).entries());
-  const { id } = await api('/api/runs', { method: 'POST', body: JSON.stringify(body) });
-  showLog(id);
+  const result = await api('/api/runs', { method: 'POST', body: JSON.stringify(body) });
+  if (result.error) { alert(result.error); return; }
+  showLog(result.ids[0]);
+  if (result.ids.length > 1) groupChoice = null;   // affiche le nouveau groupe
   refreshRuns();
 });
 
-let lastStates = {};
+let lastStates = {}, lastRuns = [];
+const stateNames = { queued: 'en attente', pending: 'démarrage', running: 'en cours', done: 'terminé', error: 'erreur', stopped: 'arrêté', unknown: 'inconnu' };
+function duration(seconds) {
+  const h = Math.floor(seconds / 3600), m = Math.floor(seconds % 3600 / 60), s = seconds % 60;
+  return h ? `${h} h ${String(m).padStart(2, '0')}` : m ? `${m} min ${String(s).padStart(2, '0')}` : `${s} s`;
+}
+function stateCell(r, queue) {
+  const st = r.status, s = st.state;
+  let text = stateNames[s] || s;
+  if (s === 'done' && st.duration !== undefined) text += ` (${duration(st.duration)})`;
+  if (s === 'queued') text += ` (${queue.indexOf(r.id) + 1}ᵉ)`;
+  const p = st.progress;
+  if (s === 'running' && p) {
+    const remaining = p.remaining === null || p.remaining === undefined ? 'estimé après le 1ᵉʳ épisode' : `reste ~${duration(p.remaining)}`;
+    return `${text} · ép. ${p.done}/${p.total}<br><span class="hint">${duration(p.elapsed)} · ${remaining}</span>` +
+      `<div class="bar"><div style="width:${(100 * p.done / p.total).toFixed(1)}%"></div></div>`;
+  }
+  return text;
+}
 async function refreshRuns() {
   const runs = await api('/api/runs');
   // Un run coché encore en cours (ou qui vient de finir) : on recharge son détail
@@ -148,15 +281,21 @@ async function refreshRuns() {
     lastStates[r.id] = s;
   }
   if (changed) updateComparison();
-  const head = `<tr><th></th><th>Run</th><th>Stratégie</th><th>Actif</th><th class="num">Ép.</th><th>État</th>
+  // position dans la file d'attente (le plus ancien part en premier)
+  const queue = runs.filter(r => r.status.state === 'queued')
+    .sort((a, b) => (a.status.queuedAt || 0) - (b.status.queuedAt || 0)).map(r => r.id);
+  lastRuns = runs;
+  updateGroups();
+  const head = `<tr><th></th><th>Run</th><th>Stratégie</th><th>Actif</th><th class="num">Ép.</th><th>Options</th><th>État</th>
     <th class="num">Sharpe test</th><th class="num">Rendement annuel test</th><th></th></tr>`;
   $('runs').innerHTML = head + runs.map(r => {
     const s = r.status.state, t = r.metrics && r.metrics.test;
-    const check = s === 'done' || s === 'running' || s === 'pending' ? `<input type="checkbox" data-id="${r.id}" ${selected.has(r.id) ? 'checked' : ''} style="width:auto">` : '';
-    const stop = s === 'running' ? `<button class="small" data-stop="${r.id}">arrêter</button>` : '';
+    const check = ['done', 'running', 'pending'].includes(s) ? `<input type="checkbox" data-id="${r.id}" ${selected.has(r.id) ? 'checked' : ''} style="width:auto">` : '';
+    const stop = ['running', 'pending', 'queued'].includes(s) ? `<button class="small" data-stop="${r.id}">${s === 'queued' ? 'retirer' : 'arrêter'}</button>` : '';
     return `<tr><td>${check}</td><td>${r.id}</td><td>${r.config.strategy}</td><td>${r.config.stock}</td>
       <td class="num">${r.config.strategy === 'TDQN' ? r.config.episodes : '–'}</td>
-      <td class="state ${s}" title="${r.status.message || ''}">${s}${r.status.duration ? ` (${r.status.duration}s)` : ''}</td>
+      <td class="hint opts">${optionText(r.config)}</td>
+      <td class="state ${s}" title="${r.status.message || ''}">${stateCell(r, queue)}</td>
       <td class="num">${t ? fmt(t['Sharpe Ratio'], 3) : '–'}</td><td class="num">${t ? fmt(t['Annualized Return (%)']) + ' %' : '–'}</td>
       <td><button class="small" data-log="${r.id}">journal</button> ${stop}</td></tr>`;
   }).join('');
@@ -219,7 +358,13 @@ async function updateComparison() {
   // 3. Tableau des indicateurs, une colonne par run
   if (!runs.length) { $('metrics').innerHTML = '<tr><td class="hint">Aucun run coché.</td></tr>'; return; }
   const keys = Object.keys(runs[0].metrics[period]);
-  $('metrics').innerHTML = `<tr><th>${period === 'test' ? 'Test' : 'Entraînement'}</th>${runs.map(r => `<th class="num">${name(r)}</th>`).join('')}</tr>` +
+  const periodText = r => { const s = r[period].Date; return `${s[0]} → ${s[s.length - 1]}`; };
+  const options = optionRows.filter(([, f]) => runs.some(r => f(r.config) !== null && f(r.config) !== undefined));
+  $('metrics').innerHTML = `<tr><th></th>${runs.map(r => `<th class="num">${name(r)}</th>`).join('')}</tr>` +
+    `<tr class="section"><td colspan="${runs.length + 1}">Paramètres</td></tr>` +
+    options.map(([label, f]) => `<tr><td>${label}</td>${runs.map(r => { const v = f(r.config); return `<td class="num">${v === null || v === undefined ? '–' : v}</td>`; }).join('')}</tr>`).join('') +
+    `<tr><td>Période ${period === 'test' ? 'de test' : 'd\'entraînement'}</td>${runs.map(r => `<td class="num">${periodText(r)}</td>`).join('')}</tr>` +
+    `<tr class="section"><td colspan="${runs.length + 1}">${period === 'test' ? 'Test' : 'Entraînement'}</td></tr>` +
     keys.map(k => `<tr><td>${k}</td>${runs.map(r => `<td class="num">${fmt(r.metrics[period][k], k.includes('Ratio') || k === 'Skewness' ? 3 : 2)}</td>`).join('')}</tr>`).join('');
 }
 
@@ -232,9 +377,14 @@ function updateCurves(runs, name) {
     for (const [tag, points] of Object.entries(r.curves.scalars || {})) {
       const isTrain = tag.startsWith('Training');
       if (!isTrain) second = tag;
-      sharpe.push({ label: `${name(r)} · ${isTrain ? 'entraînement' : tag.startsWith('Validation') ? 'validation' : 'test'}`,
+      // Validation : TDQN garde les poids de l'épisode au meilleur Sharpe, on le marque
+      const isValidation = tag.startsWith('Validation');
+      let best = -1;
+      if (isValidation) points.forEach(([, y], k) => { if (y !== null && (best < 0 || y > points[best][1])) best = k; });
+      sharpe.push({ label: `${name(r)} · ${isTrain ? 'entraînement' : isValidation ? `validation (meilleur : ép. ${best + 1})` : 'test'}`,
         data: points.map(([x, y]) => ({ x: x + 1, y })), borderColor: color(i), backgroundColor: color(i),
-        borderDash: isTrain ? [] : [6, 4], pointRadius: 2, borderWidth: 1.6 });
+        borderDash: isTrain ? [] : [6, 4], pointRadius: points.map((p, k) => k === best ? 6 : 2),
+        pointStyle: points.map((p, k) => k === best ? 'star' : 'circle'), borderWidth: 1.6 });
     }
   });
   $('secondTag').textContent = second && second.startsWith('Validation') ? 'période de validation' : 'période de test';
@@ -255,6 +405,78 @@ function updateCurves(runs, name) {
 
   $('curvesHint').textContent = runs.length ? '' : 'Coche un run TDQN (en cours ou terminé) pour voir ses courbes. Les runs lancés avant cette version du site n\'en ont pas.';
 }
+
+// ---- Répétitions et balayages : synthèse par groupe
+let groupChoice = null, groupChart;
+const mean = a => a.reduce((x, y) => x + y, 0) / a.length;
+const std = a => a.length > 1 ? Math.sqrt(a.reduce((x, y) => x + (y - mean(a)) ** 2, 0) / (a.length - 1)) : 0;
+const meanStd = (a, d = 2) => a.length ? `${fmt(mean(a), d)} ± ${fmt(std(a), d)}` : '–';
+
+function groupsOf(runs) {
+  const groups = {};
+  for (const r of runs) if (r.config.group) (groups[r.config.group] = groups[r.config.group] || []).push(r);
+  return groups;
+}
+
+let groupBusy = false;
+async function updateGroups() {
+  const groups = groupsOf(lastRuns), keys = Object.keys(groups).sort().reverse();
+  $('groups').hidden = !keys.length;
+  if (!keys.length || groupBusy) return;
+  if (!groupChoice || !groups[groupChoice]) groupChoice = keys[0];
+  const options = keys.map(k => { const g = groups[k], c = g[0].config;
+    return `<option value="${k}" ${k === groupChoice ? 'selected' : ''}>${c.groupLabel || c.strategy} · ${k} (${g.length} runs)</option>`; }).join('');
+  if ($('groupSelect').innerHTML !== options) $('groupSelect').innerHTML = options;
+
+  // détail des runs terminés (courbes de validation, capital de test), mis en cache
+  groupBusy = true;
+  const runs = groups[groupChoice];
+  try {
+    for (const r of runs) if (r.status.state === 'done' && !(details[r.id] && details[r.id].status.state === 'done')) details[r.id] = await api(`/api/runs/${r.id}`);
+  } finally { groupBusy = false; }
+
+  const variants = {};
+  for (const r of runs) { const v = r.config.variant || 'répétitions'; (variants[v] = variants[v] || []).push(r); }
+  const rows = Object.entries(variants).map(([variant, list]) => {
+    const done = list.filter(r => r.status.state === 'done' && r.metrics);
+    const metric = k => done.map(r => r.metrics.test[k]).filter(v => v !== null && v !== undefined);
+    const validation = done.map(r => {
+      const c = details[r.id] && details[r.id].curves, tag = c && Object.keys(c.scalars || {}).find(t => t.startsWith('Validation'));
+      return tag ? Math.max(...c.scalars[tag].map(p => p[1])) : null;
+    }).filter(v => v !== null);
+    const states = list.map(r => r.status.state);
+    return { variant, list, done, cells: [
+      `${done.length}/${list.length}${states.includes('running') ? ' · en cours' : ''}${states.includes('queued') ? ' · en attente' : ''}`,
+      meanStd(metric('Sharpe Ratio'), 3), meanStd(metric('Annualized Return (%)')), meanStd(metric('Max Drawdown (%)')),
+      meanStd(metric('PnL'), 0), validation.length ? meanStd(validation, 3) : '–'] };
+  });
+  $('groupTable').innerHTML = `<tr><th>Variante</th><th class="num">Terminés</th><th class="num">Sharpe test</th><th class="num">Rendement annuel test (%)</th>
+    <th class="num">Max drawdown test (%)</th><th class="num">PnL test</th><th class="num">Sharpe validation</th></tr>` +
+    rows.map(row => `<tr><td>${row.variant}</td>${row.cells.map(c => `<td class="num">${c}</td>`).join('')}</tr>`).join('');
+
+  // capital moyen ± écart-type par variante (les runs d'un même groupe ont les mêmes dates)
+  const datasets = [];
+  rows.forEach((row, i) => {
+    const series = row.done.map(r => details[r.id] && details[r.id].test).filter(Boolean);
+    if (!series.length) return;
+    const dates = series[0].Date, color = palette[i % palette.length];
+    const at = k => series.map(s => 100 * s.Money[k] / s.Money[0]);
+    const m = dates.map((d, k) => mean(at(k))), sd = dates.map((d, k) => std(at(k)));
+    datasets.push({ label: '', data: dates.map((d, k) => ({ x: d, y: m[k] + sd[k] })), borderWidth: 0, pointRadius: 0, fill: false });
+    datasets.push({ label: '', data: dates.map((d, k) => ({ x: d, y: m[k] - sd[k] })), borderWidth: 0, pointRadius: 0,
+      fill: '-1', backgroundColor: color + '33' });
+    datasets.push({ label: `${row.variant} (${series.length})`, data: dates.map((d, k) => ({ x: d, y: m[k] })),
+      borderColor: color, backgroundColor: color, pointRadius: 0, borderWidth: 1.8 });
+  });
+  groupChart.data.datasets = datasets;
+  groupChart.update();
+}
+$('groupSelect').addEventListener('change', e => { groupChoice = e.target.value; updateGroups(); });
+$('groupCheck').addEventListener('click', async () => {
+  for (const r of groupsOf(lastRuns)[groupChoice] || []) if (['done', 'running', 'pending'].includes(r.status.state)) selected.add(r.id);
+  await refreshRuns();
+  await updateComparison();
+});
 
 function makeLinearChart(canvas, xTitle, yTitle) {
   return new Chart(canvas, {
@@ -285,6 +507,8 @@ priceChart = makeChart($('price'));
 sharpeChart = makeLinearChart($('sharpeCurve'), 'épisode', 'Sharpe');
 lossChart = makeLinearChart($('lossCurve'), 'mises à jour du réseau', 'perte');
 rewardChart = makeLinearChart($('rewardCurve'), 'épisode', 'récompense totale');
+groupChart = makeChart($('groupEquity'));
+groupChart.options.plugins.legend.labels = { filter: item => item.text !== '' };
 loadOptions();
 refreshRuns();
 updateComparison();
